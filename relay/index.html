@@ -1,0 +1,97 @@
+<!doctype html>
+<!--
+  NiceSpeak voice relay: real microphone -> Vapi corporatizer assistant -> chosen
+  output device. For live calls: install a virtual audio device (e.g. BlackHole 2ch),
+  pick it as Output below, and select it as the Microphone inside Zoom/Meet.
+  Serve from localhost (mic requires a secure context):
+    python3 -m http.server 8765 -d scripts/voice-relay
+  Only client-safe values live here (public key + assistant id).
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<title>NiceSpeak Voice Relay</title>
+<style>
+  body { font-family: -apple-system, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 16px; }
+  button { font-size: 16px; padding: 10px 22px; border-radius: 8px; border: 1px solid #ccc; cursor: pointer; }
+  button.live { background: #4f37b8; color: #fff; border-color: #4f37b8; }
+  select { font-size: 14px; padding: 6px; max-width: 100%; }
+  #status { margin: 12px 0; color: #555; }
+  .line { margin: 4px 0; }
+  .user { color: #777; }
+  .assistant { color: #4f37b8; font-weight: 600; }
+</style>
+</head>
+<body>
+<h2>NiceSpeak Voice Relay</h2>
+<div>
+  <button id="toggle">Start relay</button>
+  <div id="status">idle</div>
+  <label>Output device (pick BlackHole 2ch for calls):
+    <select id="sink"></select>
+  </label>
+</div>
+<div id="transcript"></div>
+<script type="module">
+import Vapi from "https://esm.sh/@vapi-ai/web";
+
+const PUBLIC_KEY = "c3eadc8d-713d-40f3-811a-c42189729ca3";
+const ASSISTANT_ID = "7017754f-8e23-4c3e-8e3d-292c5f66bbb2";
+const params = new URLSearchParams(location.search);
+
+const status = (text) => { document.getElementById("status").textContent = text; };
+const addLine = (role, text) => {
+  const div = document.createElement("div");
+  div.className = `line ${role}`;
+  div.textContent = `${role === "user" ? "you" : "corporate you"}: ${text}`;
+  const pane = document.getElementById("transcript");
+  pane.prepend(div);
+  while (pane.children.length > 30) pane.lastChild.remove();
+};
+
+// Route every audio element (Vapi/Daily creates them dynamically) to the chosen sink.
+const sinkSelect = document.getElementById("sink");
+const routeAll = async () => {
+  const sinkId = sinkSelect.value;
+  if (!sinkId) return;
+  for (const el of document.querySelectorAll("audio")) {
+    try { await el.setSinkId(sinkId); } catch (error) { console.error("setSinkId failed", error); status(`output routing failed: ${error.message}`); }
+  }
+};
+new MutationObserver(routeAll).observe(document.documentElement, { childList: true, subtree: true });
+sinkSelect.onchange = routeAll;
+
+async function fillSinks() {
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  sinkSelect.innerHTML = "";
+  for (const device of devices.filter(d => d.kind === "audiooutput")) {
+    const option = document.createElement("option");
+    option.value = device.deviceId;
+    option.textContent = device.label || "output";
+    if (/blackhole/i.test(device.label)) option.selected = true;
+    sinkSelect.append(option);
+  }
+}
+
+const vapi = new Vapi(PUBLIC_KEY);
+window.__events = [];
+const mark = (type, data) => window.__events.push({ t: Date.now(), type, data });
+let live = false;
+
+vapi.on("call-start", () => { live = true; mark("call-start"); status("live — speak normally; the corporate version speaks after you pause"); document.getElementById("toggle").textContent = "Stop relay"; document.getElementById("toggle").classList.add("live"); fillSinks().then(routeAll); });
+vapi.on("call-end", () => { live = false; mark("call-end"); status("stopped"); document.getElementById("toggle").textContent = "Start relay"; document.getElementById("toggle").classList.remove("live"); });
+vapi.on("error", (e) => { mark("error", JSON.stringify(e).slice(0, 300)); status(`error: ${JSON.stringify(e).slice(0, 200)}`); });
+vapi.on("message", (m) => {
+  if (m.type === "transcript" && m.transcriptType === "final") { addLine(m.role, m.transcript); mark("final", { role: m.role }); }
+});
+
+document.getElementById("toggle").onclick = async () => {
+  if (live) { vapi.stop(); return; }
+  status("connecting…");
+  try { await vapi.start(ASSISTANT_ID); } catch (error) { status(`start failed: ${error?.message ?? error}`); }
+};
+
+if (params.get("autostart") === "1") document.getElementById("toggle").click();
+</script>
+</body>
+</html>

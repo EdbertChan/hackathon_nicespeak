@@ -1,0 +1,49 @@
+<!doctype html>
+<html>
+<body>
+<pre id="log"></pre>
+<script type="module">
+import Vapi from "https://esm.sh/@vapi-ai/web";
+
+const PUBLIC_KEY = "c3eadc8d-713d-40f3-811a-c42189729ca3";
+const ASSISTANT_ID = "7017754f-8e23-4c3e-8e3d-292c5f66bbb2";
+window.__events = [];
+window.__done = false;
+window.__error = null;
+const t0 = performance.now();
+const log = (type, data) => {
+  const entry = { t: Math.round(performance.now() - t0), type, ...(data !== undefined ? { data } : {}) };
+  window.__events.push(entry);
+  document.getElementById("log").textContent += JSON.stringify(entry) + "\n";
+};
+
+const vapi = new Vapi(PUBLIC_KEY);
+let assistantSpoke = false;
+vapi.on("call-start", () => log("call-start"));
+vapi.on("call-end", () => { log("call-end"); window.__done = true; });
+vapi.on("speech-start", () => { assistantSpoke = true; log("assistant-audio-start"); });
+vapi.on("speech-end", () => {
+  log("assistant-audio-end");
+  if (assistantSpoke) setTimeout(() => vapi.stop(), 300);
+});
+vapi.on("error", (e) => {
+  window.__error = JSON.stringify(e).slice(0, 800);
+  log("error", window.__error);
+  window.__done = true;
+});
+vapi.on("message", (m) => {
+  if (m.type === "speech-update") log("speech-update", { role: m.role, status: m.status });
+  else if (m.type === "transcript") log("transcript", { role: m.role, kind: m.transcriptType, text: m.transcript });
+  else if (m.type === "model-output") log("model-output");
+  else if (m.type === "conversation-update") log("conversation-update");
+  else log(m.type);
+});
+
+vapi.start(ASSISTANT_ID).catch((e) => {
+  window.__error = String(e && e.message || e).slice(0, 800);
+  log("start-failed", window.__error);
+  window.__done = true;
+});
+</script>
+</body>
+</html>
