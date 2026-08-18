@@ -50,6 +50,32 @@ headphones (required — otherwise the twin hears itself). Raise the assistant's
 `silenceTimeoutSeconds` (600) or it hangs up while you set up the meeting.
 Observed turn latency: ~2s from your pause to the twin speaking in-meeting.
 
+## Tech stack
+
+One local HTML page orchestrates everything. Your mic → **Vapi** (Deepgram
+nova-3 STT → Groq `llama-3.1-8b-instant` with the NiceSpeak corporate prompt →
+ElevenLabs `eleven_flash_v2_5` TTS in your cloned voice) → that reply audio
+drives a **Simli** face twin (legacy face built from one webcam selfie) which
+lip-syncs it in WebRTC → twin audio exits through **BlackHole 2ch** into
+Zoom's mic, twin video exits through **OBS Virtual Camera** (window-capturing
+the page) into Zoom's camera. No backend of our own; keys travel as URL/env
+values and are never committed.
+
+## Billing, API limits & pausing
+
+- **Pause = close the call tab.** A live tab bills Vapi/Simli/ElevenLabs by
+  the minute until it closes or the idle timers fire (Vapi silence timeout
+  600s, max 3600s; Simli idle 600s, session 3600s). OBS, BlackHole, and the
+  local server cost nothing while parked; restarting is reopening one URL.
+- **Vapi** — per-minute billing (bundled Deepgram/Groq). The *public* key can
+  start calls from any browser that has it — rotate it after the demo.
+- **ElevenLabs** — monthly character quota for TTS; instant-clone voice slots
+  are limited per tier. Attaching the key to Vapi requires the **User: Read**
+  permission on the key.
+- **Simli** — trial minutes per month; new-gen "Trinity" face creation is
+  plan-gated (quota 0 on trial), so twins use the legacy `/faces/legacy` path.
+- **Zoom free** — 40-minute meetings. **Loom** — file uploads are plan-gated.
+
 ## Run the relay
 
 ```bash
