@@ -61,6 +61,15 @@ Zoom's mic, twin video exits through **OBS Virtual Camera** (window-capturing
 the page) into Zoom's camera. No backend of our own; keys travel as URL/env
 values and are never committed.
 
+Who does what — the face is **not** Vapi's:
+
+- **Vapi** is voice-only: hears you, rewrites, and speaks (STT + LLM + TTS
+  orchestration). It never touches video.
+- **Simli** created the face (one webcam selfie → legacy face) and animates
+  it: it listens to Vapi's reply audio and moves the lips to match.
+- **ElevenLabs** created the voice (one ~30s voice memo → instant clone) that
+  Vapi speaks with.
+
 ## Billing, API limits & pausing
 
 - **Pause = close the call tab.** A live tab bills Vapi/Simli/ElevenLabs by
