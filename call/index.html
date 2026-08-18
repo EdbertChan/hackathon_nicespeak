@@ -1,0 +1,167 @@
+<!doctype html>
+<!--
+  NiceSpeak simulated video call: you rant into the mic; the on-screen
+  participant (a Simli avatar) speaks the corporatized version with synced lips.
+  Query params: ?simliKey=...&faceId=...&autostart=1
+  Audio clock: the Simli stream (video+audio synced); raw Vapi audio is muted.
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<title>NiceSpeak Call</title>
+<style>
+  body { font-family: -apple-system, sans-serif; background: #111; color: #eee; margin: 0; }
+  .stage { display: flex; flex-direction: column; align-items: center; padding: 24px; gap: 12px; }
+  .tile { position: relative; width: 640px; max-width: 95vw; background: #000; border-radius: 12px; overflow: hidden; }
+  video { width: 100%; display: block; }
+  .name { position: absolute; left: 10px; bottom: 10px; background: rgba(0,0,0,.6); padding: 4px 10px; border-radius: 6px; font-size: 14px; }
+  #status { color: #9a8fd6; }
+  #captions { width: 640px; max-width: 95vw; font-size: 14px; }
+  .line { margin: 3px 0; }
+  .user { color: #999; }
+  .assistant { color: #b3a6f0; font-weight: 600; }
+  button { font-size: 16px; padding: 10px 22px; border-radius: 8px; border: 0; cursor: pointer; background: #4f37b8; color: #fff; }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="tile">
+    <video id="simliVideo" autoplay playsinline></video>
+    <audio id="simliAudio" autoplay></audio>
+    <div class="name">Definitely Real Executive</div>
+  </div>
+  <button id="toggle">Start call</button>
+  <div id="status">idle</div>
+  <div id="captions"></div>
+</div>
+<script type="module">
+import Vapi from "https://esm.sh/@vapi-ai/web";
+import { SimliClient, generateSimliSessionToken, LogLevel } from "./simli-bundle.js";
+
+const params = new URLSearchParams(location.search);
+const SIMLI_KEY = params.get("simliKey");
+const FACE_ID = params.get("faceId");
+const PUBLIC_KEY = "c3eadc8d-713d-40f3-811a-c42189729ca3";
+const ASSISTANT_ID = "7017754f-8e23-4c3e-8e3d-292c5f66bbb2";
+
+window.__events = [];
+window.__done = false;
+window.__error = null;
+const t0 = performance.now();
+const log = (type, data) => {
+  window.__events.push({ t: Math.round(performance.now() - t0), type, ...(data !== undefined ? { data } : {}) });
+};
+const status = (text) => { document.getElementById("status").textContent = text; log("status", text); };
+const caption = (role, text) => {
+  const div = document.createElement("div");
+  div.className = `line ${role}`;
+  div.textContent = `${role === "user" ? "you" : "them"}: ${text}`;
+  const pane = document.getElementById("captions");
+  pane.prepend(div);
+  while (pane.children.length > 12) pane.lastChild.remove();
+};
+
+let simliClient = null;
+let vapiStarted = false;
+let attachedTrack = false;
+const vapi = new Vapi(PUBLIC_KEY);
+
+async function startSimli() {
+  status("creating avatar session…");
+  const { session_token } = await generateSimliSessionToken({
+    apiKey: SIMLI_KEY,
+    config: { faceId: FACE_ID, handleSilence: false, maxSessionLength: 3600, maxIdleTime: 600 }
+  });
+  simliClient = new SimliClient(
+    session_token,
+    document.getElementById("simliVideo"),
+    document.getElementById("simliAudio"),
+    null,
+    LogLevel.INFO,
+    "livekit"
+  );
+  simliClient.on("start", () => { log("simli-start"); status("avatar live — connecting voice…"); if (!vapiStarted) { vapiStarted = true; vapi.start(ASSISTANT_ID).catch(e => { window.__error = String(e?.message ?? e); log("vapi-start-failed", window.__error); }); } });
+  simliClient.on("speaking", () => log("avatar-speaking"));
+  simliClient.on("silent", () => log("avatar-silent"));
+  simliClient.on("error", (e) => { window.__error = `simli: ${JSON.stringify(e).slice(0, 300)}`; log("simli-error", window.__error); });
+  simliClient.on("startup_error", (m) => { window.__error = `simli startup: ${m}`; log("simli-startup-error", String(m).slice(0, 300)); window.__done = true; status(window.__error); });
+  await simliClient.start();
+}
+
+// Route the lip-synced Simli audio to the virtual mic (BlackHole) so Zoom can
+// use it as the microphone, while a cloned monitor stream stays on the default
+// output so you still hear the call locally. ?sink=none disables routing.
+let monitorEl = null;
+async function routeToVirtualMic() {
+  const sinkPref = (params.get("sink") ?? "blackhole").toLowerCase();
+  if (sinkPref === "none") return;
+  const simliAudio = document.getElementById("simliAudio");
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const sink = devices.find(d => d.kind === "audiooutput" && d.label.toLowerCase().includes(sinkPref));
+    if (!sink) { log("sink-missing", sinkPref); status(`output "${sinkPref}" not found — audio stays on speakers`); return; }
+    await simliAudio.setSinkId(sink.deviceId);
+    log("sink-routed", sink.label);
+    if (!monitorEl && simliAudio.srcObject) {
+      monitorEl = new Audio();
+      monitorEl.srcObject = simliAudio.srcObject;
+      monitorEl.volume = 0.5;
+      monitorEl.play().catch(() => {});
+      log("monitor-started");
+    }
+    status(`live — Zoom mic: ${sink.label}`);
+  } catch (error) {
+    log("sink-error", String(error?.message ?? error).slice(0, 200));
+    status(`audio routing failed: ${error.message}`);
+  }
+}
+
+// Feed the assistant's reply audio into Simli, and mute the raw element so the
+// lip-synced Simli stream is the only audible voice.
+function attachVapiAudio() {
+  if (attachedTrack) return;
+  for (const el of document.querySelectorAll("audio")) {
+    if (el.id === "simliAudio" || !el.srcObject) continue;
+    const track = el.srcObject.getAudioTracks?.()[0];
+    if (!track) continue;
+    el.muted = true;
+    el.volume = 0;
+    simliClient.listenToMediastreamTrack(track);
+    attachedTrack = true;
+    log("vapi-audio-attached");
+    status("live — rant away; they answer in corporate");
+    setTimeout(routeToVirtualMic, 500);
+    setTimeout(routeToVirtualMic, 3000);
+    return;
+  }
+}
+new MutationObserver(attachVapiAudio).observe(document.documentElement, { childList: true, subtree: true });
+
+vapi.on("call-start", () => { log("call-start"); attachVapiAudio(); });
+if (params.get("clean") === "1") {
+  document.getElementById("captions").style.display = "none";
+  document.getElementById("status").style.display = "none";
+}
+document.querySelector(".name").textContent = params.get("name") ?? "Definitely Real Executive";
+vapi.on("call-end", () => { log("call-end"); window.__done = true; status("call ended"); });
+vapi.on("error", (e) => { window.__error = JSON.stringify(e).slice(0, 400); log("vapi-error", window.__error); });
+vapi.on("message", (m) => {
+  if (m.type === "speech-update") log("speech-update", { role: m.role, status: m.status });
+  else if (m.type === "transcript") {
+    log("transcript", { role: m.role, kind: m.transcriptType, text: m.transcript });
+    if (m.transcriptType === "final") caption(m.role, m.transcript);
+  }
+});
+
+let running = false;
+document.getElementById("toggle").onclick = async () => {
+  if (running) { vapi.stop(); simliClient?.stop(); running = false; document.getElementById("toggle").textContent = "Start call"; return; }
+  running = true;
+  document.getElementById("toggle").textContent = "End call";
+  try { await startSimli(); } catch (error) { window.__error = String(error?.message ?? error); log("simli-init-failed", window.__error); status(`avatar failed: ${window.__error}`); window.__done = true; }
+};
+
+if (params.get("autostart") === "1") document.getElementById("toggle").click();
+</script>
+</body>
+</html>

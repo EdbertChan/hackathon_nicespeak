@@ -28,6 +28,27 @@ WebRTC overhead, so a real mic sits at or below them.
 - `scripts/realtime-corporatize-test.mjs` — standalone ElevenLabs proof:
   mp3 → STT → NiceSpeak `/v1/rewrite` → instant voice clone → TTS, with
   per-stage timings. `ELEVENLABS_API_KEY=… node scripts/realtime-corporatize-test.mjs [input.mp3]`
+- `call/index.html` — the full live Zoom twin: your mic → Vapi corporatizer →
+  a Simli digital twin of you (face from a webcam selfie, voice cloned from a
+  30s memo) speaks the rewrite with synced lips. Audio routes to BlackHole,
+  video goes to Zoom via OBS Virtual Camera. `simli-bundle.js` is prebuilt
+  (`bun add simli-client && bun build simli-entry.js --outfile simli-bundle.js
+  --format=esm --target=browser` to rebuild).
+
+## Run the live Zoom twin
+
+```bash
+python3 -m http.server 8765 -d call
+open "http://localhost:8765/?simliKey=YOUR_SIMLI_KEY&faceId=YOUR_FACE_ID&sink=blackhole&name=Your%20Name&autostart=1"
+```
+
+One-time setup: create a face (`POST https://api.simli.ai/faces/legacy` with a
+frontal selfie), clone your voice on ElevenLabs from ~30s of speech, and point
+the Vapi assistant's voice at that clone. In Zoom: mic = **BlackHole 2ch**,
+camera = **OBS Virtual Camera** (OBS window-captures the call page), speaker =
+headphones (required — otherwise the twin hears itself). Raise the assistant's
+`silenceTimeoutSeconds` (600) or it hangs up while you set up the meeting.
+Observed turn latency: ~2s from your pause to the twin speaking in-meeting.
 
 ## Run the relay
 
